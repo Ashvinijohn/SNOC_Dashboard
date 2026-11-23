@@ -38,6 +38,12 @@ DOMAIN_COLORS = {
 }
 MAP_COLORS = {"Offshore": NAVY, "Onshore": ORANGE}
 
+# Grayscale light basemap (Esri "World Light Gray") - free, no API key needed.
+# To use another provider, change these two URLs and the attribution text.
+BASE_TILES = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+LABEL_TILES = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
+TILE_ATTR = "Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ"
+
 st.markdown(
     f"""
     <style>
@@ -262,7 +268,10 @@ with map_col:
         lat_min, lat_max = f_wells["Latitude"].min(), f_wells["Latitude"].max()
         lon_min, lon_max = f_wells["Longitude"].min(), f_wells["Longitude"].max()
         m = folium.Map(location=[(lat_min + lat_max) / 2, (lon_min + lon_max) / 2], zoom_start=6,
-                       tiles="CartoDB positron", prefer_canvas=True)     # grayscale light basemap
+                       tiles=None, prefer_canvas=True, max_zoom=16)
+        folium.TileLayer(BASE_TILES, attr=TILE_ATTR, name="Grayscale (Light)", max_zoom=16).add_to(m)
+        folium.TileLayer(LABEL_TILES, attr=TILE_ATTR, name="Labels", overlay=True,
+                         control=False, max_zoom=16).add_to(m)           # place and sea names
         m.fit_bounds([[lat_min, lon_min], [lat_max, lon_max]], padding=(25, 25), max_zoom=11)
         for lat, lon, name, fld, n_logs, loc in zip(
                 f_wells["Latitude"], f_wells["Longitude"], f_wells["Well name (project)"],
@@ -295,12 +304,13 @@ with map_col:
                   hover_data={"Field name": True, "Logs": True, "Latitude": False,
                               "Longitude": False, "Onshore / Offshore": False},
                   zoom=zoom, height=680, center=center)
+        raster = [dict(below="traces", sourcetype="raster", source=[BASE_TILES])]
         try:
             fig = px.scatter_map(f_wells, **kw)
-            fig.update_layout(map_style="carto-positron")
+            fig.update_layout(map_style="white-bg", map_layers=raster)
         except AttributeError:
             fig = px.scatter_mapbox(f_wells, **kw)
-            fig.update_layout(mapbox_style="carto-positron")
+            fig.update_layout(mapbox_style="white-bg", mapbox_layers=raster)
         fig.update_traces(marker=dict(size=11, opacity=0.9))
         fig.update_layout(title=dict(text="<b>Well Location</b>", x=0.5,
                                      font=dict(color="#222", size=15)),
