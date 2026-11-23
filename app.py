@@ -1,5 +1,6 @@
 import math
 import os
+import textwrap
 
 import pandas as pd
 import plotly.express as px
@@ -175,8 +176,14 @@ def show(fig):
         st.plotly_chart(fig, theme=None, use_container_width=True)
 
 
-def short(label: str, n: int = 28) -> str:
-    return label if len(label) <= n else label[: n - 1] + "…"
+# Pie diameter as a fraction of the chart's plot height (bigger number = bigger pie).
+# In the Power BI report all three pies are the same size, so they share one value here.
+PIE_SIZE = {"Logs Source": 0.90, "Curves per Domain": 0.90, "Logs Status": 0.90}
+
+
+def wrap(label: str, width: int = 18) -> str:
+    """Break long labels onto two lines so they do not squeeze the pie."""
+    return "<br>".join(textwrap.wrap(label, width)) or label
 
 
 def pie(counts: pd.Series, colors, template, title):
@@ -187,9 +194,11 @@ def pie(counts: pd.Series, colors, template, title):
         return
     vc = counts.rename_axis("label").reset_index(name="value")
     fig = px.pie(vc, names="label", values="value", color="label", color_discrete_map=colors)
-    fig.update_traces(text=vc["label"].map(short), texttemplate=template, textposition="outside",
+    h = PIE_SIZE.get(title, 0.68)
+    fig.update_traces(text=vc["label"].map(wrap), texttemplate=template, textposition="outside",
                       sort=False, automargin=True, marker=dict(line=dict(width=0)),
-                      textfont=dict(color=TEXT, size=11))
+                      textfont=dict(color=TEXT, size=10),
+                      domain=dict(x=[0.05, 0.95], y=[0.5 - h / 2, 0.5 + h / 2]))
     fig.update_layout(title=dict(text=f"<b>{title}</b>", x=0.5, font=dict(color="#222", size=15)),
                       showlegend=False, height=330, margin=dict(l=30, r=30, t=50, b=20),
                       paper_bgcolor=PANEL, font=dict(color=TEXT))
@@ -197,7 +206,7 @@ def pie(counts: pd.Series, colors, template, title):
 
 
 grid, map_col = st.columns([2, 1.15])
-LABEL_VAL_PCT = "%{text} %{value:.0f} (%{percent:.0%})"
+LABEL_VAL_PCT = "%{text}<br>%{value:.0f} (%{percent:.0%})"
 
 with grid:
     a, b = st.columns(2)
