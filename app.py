@@ -1,10 +1,15 @@
 import math
 import os
-import textwrap
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+
+try:                                   # Leaflet map (no WebGL needed) - falls back to Plotly if missing
+    import folium
+    from streamlit_folium import st_folium
+except ImportError:
+    folium = None
 
 st.set_page_config(page_title="SNOC Legacy Well Log Recovery", layout="wide",
                    initial_sidebar_state="collapsed")
@@ -131,11 +136,20 @@ with h2:
         "letter-spacing:.5px;line-height:1.2;'>SNOC LEGACY WELL LOG RECOVERY</div>",
         unsafe_allow_html=True)
 
+def _field_changed():
+    st.session_state["sel_well"] = "All"
+
+
+def _reset_filters():
+    st.session_state["sel_field"] = "All"
+    st.session_state["sel_well"] = "All"
+
+
 fields = sorted(logs["Field"].dropna().unique())
 with h3:
-    sel_field = st.selectbox("Field", ["All"] + fields)
+    sel_field = st.selectbox("Field", ["All"] + fields, key="sel_field", on_change=_field_changed)
     pool = logs if sel_field == "All" else logs[logs["Field"] == sel_field]
-    sel_well = st.selectbox("Well", ["All"] + sorted(pool["Well"].dropna().unique()))
+    sel_well = st.selectbox("Well", ["All"] + sorted(pool["Well"].dropna().unique()), key="sel_well")
 
 # Same filter behaviour as the Power BI report:
 #  * the Field / Well slicers filter LogsInventory only
@@ -178,12 +192,12 @@ def show(fig):
 
 # Pie diameter as a fraction of the chart's plot height (bigger number = bigger pie).
 # In the Power BI report all three pies are the same size, so they share one value here.
-PIE_SIZE = {"Logs Source": 0.90, "Curves per Domain": 0.90, "Logs Status": 0.90}
+PIE_SIZE = {"Logs Source": 0.75, "Curves per Domain": 0.75, "Logs Status": 0.75}
 
 
-def wrap(label: str, width: int = 18) -> str:
-    """Break long labels onto two lines so they do not squeeze the pie."""
-    return "<br>".join(textwrap.wrap(label, width)) or label
+def short(label: str, n: int = 27) -> str:
+    """Long labels end with '...' like in Power BI."""
+    return label if len(label) <= n else label[: n - 1] + "…"
 
 
 def pie(counts: pd.Series, colors, template, title):
@@ -195,7 +209,7 @@ def pie(counts: pd.Series, colors, template, title):
     vc = counts.rename_axis("label").reset_index(name="value")
     fig = px.pie(vc, names="label", values="value", color="label", color_discrete_map=colors)
     h = PIE_SIZE.get(title, 0.68)
-    fig.update_traces(text=vc["label"].map(wrap), texttemplate=template, textposition="outside",
+    fig.update_traces(text=vc["label"].map(short), texttemplate=template, textposition="outside",
                       sort=False, automargin=True, marker=dict(line=dict(width=0)),
                       textfont=dict(color=TEXT, size=10),
                       domain=dict(x=[0.05, 0.95], y=[0.5 - h / 2, 0.5 + h / 2]))
@@ -206,7 +220,7 @@ def pie(counts: pd.Series, colors, template, title):
 
 
 grid, map_col = st.columns([2, 1.15])
-LABEL_VAL_PCT = "%{text}<br>%{value:.0f} (%{percent:.0%})"
+LABEL_VAL_PCT = "%{text} %{value:.0f} (%{percent:.0%})"
 
 with grid:
     a, b = st.columns(2)
@@ -239,9 +253,38 @@ with grid:
             show(fig)
 
 with map_col:
+    PANEL_TITLE = (f"<div style='background:{PANEL};text-align:center;font-weight:700;font-size:15px;"
+                   "color:#222;padding:14px 0 8px;'>Well Location</div>")
     if f_wells.empty:
-        st.caption("Well Location: no wells for this selection")
-    else:
+        st.markdown(PANEL_TITLE, unsafe_allow_html=True)
+        st.caption("No wells for this selection")
+    elif folium is not None:
+        lat_min, lat_max = f_wells["Latitude"].min(), f_wells["Latitude"].max()
+        lon_min, lon_max = f_wells["Longitude"].min(), f_wells["Longitude"].max()
+        m = folium.Map(location=[(lat_min + lat_max) / 2, (lon_min + lon_max) / 2], zoom_start=6,
+                       tiles="CartoDB positron", prefer_canvas=True)     # grayscale light basemap
+        m.fit_bounds([[lat_min, lon_min], [lat_max, lon_max]], padding=(25, 25), max_zoom=11)
+        for lat, lon, name, fld, n_logs, loc in zip(
+                f_wells["Latitude"], f_wells["Longitude"], f_wells["Well name (project)"],
+                f_wells["Field name"], f_wells["Logs"], f_wells["Onshore / Offshore"]):
+            colour = NAVY if loc == "Offshore" else ORANGE
+            folium.CircleMarker(
+                location=[lat, lon], radius=6, color=colour, weight=1, fill=True,
+                fill_color=colour, fill_opacity=0.9,
+                tooltip=folium.Tooltip(f"<b>{name}</b><br>Field: {fld}<br>Logs: {n_logs}"),
+            ).add_to(m)
+        legend = (f'<div style="position:fixed;bottom:18px;left:18px;z-index:9999;'
+                  f'background:rgba(255,255,255,.85);padding:6px 10px;border-radius:4px;'
+                  f'font-size:13px;color:#444;"><span style="color:{NAVY};font-size:16px;">&#9679;</span>'
+                  f' Offshore &nbsp; <span style="color:{ORANGE};font-size:16px;">&#9679;</span> Onshore</div>')
+        m.get_root().html.add_child(folium.Element(legend))
+        st.markdown(PANEL_TITLE, unsafe_allow_html=True)
+        map_key = f"wellmap-{sel_field}-{sel_well}"          # new key -> map re-fits on every filter change
+        try:
+            st_folium(m, height=640, use_container_width=True, returned_objects=[], key=map_key)
+        except TypeError:
+            st_folium(m, height=640, width=620, returned_objects=[], key=map_key)
+    else:   # fallback: Plotly map (needs WebGL)
         lat_min, lat_max = f_wells["Latitude"].min(), f_wells["Latitude"].max()
         lon_min, lon_max = f_wells["Longitude"].min(), f_wells["Longitude"].max()
         span = max(lat_max - lat_min, lon_max - lon_min, 0.02)
@@ -254,8 +297,8 @@ with map_col:
                   zoom=zoom, height=680, center=center)
         try:
             fig = px.scatter_map(f_wells, **kw)
-            fig.update_layout(map_style="carto-positron")          # grayscale light basemap
-        except AttributeError:                                       # older plotly
+            fig.update_layout(map_style="carto-positron")
+        except AttributeError:
             fig = px.scatter_mapbox(f_wells, **kw)
             fig.update_layout(mapbox_style="carto-positron")
         fig.update_traces(marker=dict(size=11, opacity=0.9))
@@ -266,3 +309,8 @@ with map_col:
                           legend=dict(title=None, orientation="h", y=0.02, x=0.02,
                                       bgcolor="rgba(255,255,255,.8)"))
         show(fig)
+
+# Reset button (bottom right, like the Power BI report): sets Field and Well back to "All"
+_, reset_col = st.columns([12, 1])
+with reset_col:
+    st.button("Reset", on_click=_reset_filters, key="reset_btn")
